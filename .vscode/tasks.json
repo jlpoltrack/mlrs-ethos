@@ -35,9 +35,6 @@
         "${workspaceFolder}\\.vscode\\scripts\\deploy.py",
         "--fileext", "fast",
         "--radio",
-        "--lang", "en",
-        "--step", "i18n",
-        "--step", "soundpack"   
       ],
       "problemMatcher": [],
       "presentation": { "reveal": "always", "panel": "shared", "clear": true }

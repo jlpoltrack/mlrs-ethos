@@ -449,7 +449,7 @@ local function wakeup(widget)
   end
 
   -- READ frames
-  for _=1,64 do --read 64 frames per wakeup
+  for _= 1,64 do --read 64 frames per wakeup
     local cmd, data = widget.sensor:popFrame()
     if not cmd then break end
     rx_any_count = rx_any_count + 1
@@ -558,7 +558,15 @@ local function close(widget)
 end
 
 local function init()
-  system.registerSystemTool({ name = "MLRS", icon = icon, create = create, wakeup = wakeup, event = event, paint = paint, close = close })
+  local version = system.getVersion()
+  local major, minor = version.major, version.minor
+  if major >= 1 and minor >= 7 then
+    -- in ethos 1.7 and higher we register as a module
+    system.registerMlrsModule({configure = {name = "MLRS", create = create, wakeup = wakeup, event = event, close = close}})
+  else
+    system.registerSystemTool({ name = "MLRS", icon = icon, create = create, wakeup = wakeup, event = event, paint = paint, close = close })
+  end
+
 end
 
 return { init = init }
