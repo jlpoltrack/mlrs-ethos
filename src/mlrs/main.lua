@@ -143,7 +143,7 @@ local prog = {
   startedAt = nil,
   counter = 0,
   mode = nil,            -- "load" | "save" | "reload"
-  timeout = 6.0,         -- default seconds (overridden per mode)
+  timeout = 12.0,         -- default seconds (overridden per mode)
   dlg = nil,
   -- save/reset handling
   lastRxAt = nil,        -- last time we saw any frame
@@ -435,6 +435,20 @@ local function wakeup(widget)
   if (not widget.sensor or not widget.sensor.pushFrame) and crsf and crsf.getSensor then
     widget.sensor = crsf.getSensor()
   end
+
+
+  widget._enteredAt = widget._enteredAt or os.clock()
+
+  -- Allow module / CRSF stack to settle
+  if os.clock() - widget._enteredAt < 1.5 then
+    progressEnsure({
+      mode = "load",
+      message = "Waiting for device…",
+      speedFast = false,
+      timeout = 10.0
+    })
+    return
+  end  
 
   -- During reconnect, give the device a moment to boot before sending requests
   if prog.reloading and (os.clock() - (prog.reloadStart or 0)) < 3.0 then
