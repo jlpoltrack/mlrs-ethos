@@ -155,6 +155,31 @@ local prog = {
   postSaveReloadTimeout = 25.0 -- how long to wait for packets to return after save
 }
 
+local function hardReset(widget)
+  -- stop/clear progress UI state
+  prog.open = false
+  prog.speedFast = false
+  prog.startedAt = nil
+  prog.counter = 0
+  prog.mode = nil
+  prog.dlg = nil
+
+  -- clear retry / reconnect timing
+  prog.lastRxAt = nil
+  prog.lastInfoReq = nil
+  prog.lastParamsReq = nil
+  prog.reloading = false
+  prog.reloadStart = nil
+
+  -- reset protocol/UI state
+  resetState()
+
+  -- restart the “settle” window on next wakeup
+  if widget and type(widget) == "table" then
+    widget._enteredAt = os.clock()
+  end
+end
+
 local function progressOpen(title, message, speedFast, mode)
   if prog.open then return end
   prog.open = true
@@ -169,7 +194,10 @@ local function progressOpen(title, message, speedFast, mode)
   prog.dlg = form.openProgressDialog({
     title = title or (mode=="save" and "Saving…" or "Loading…"),
     message = message or (mode=="save" and "Writing to device" or "Reading from device"),
-    close = function() end,
+    close = function() 
+       hardReset(prog.widget)
+       system.exit()
+    end,
     wakeup = function()
       local mult = prog.speedFast and 1.5 or 1
       -- drift forward unless we already finished
@@ -179,7 +207,10 @@ local function progressOpen(title, message, speedFast, mode)
       if prog.dlg and prog.dlg.value then prog.dlg:value(prog.counter) end
 
       -- watchdog
-      if prog.startedAt and (os.clock() - prog.startedAt) > prog.timeout then
+      if prog.startedAt
+        and prog.lastRxAt
+        and (prog.lastRxAt > prog.startedAt)
+        and (os.clock() - prog.startedAt) > prog.timeout then
         if prog.dlg then
           prog.dlg:message("Timed out")
           prog.dlg:closeAllowed(true)
@@ -463,7 +494,7 @@ local function wakeup(widget)
   end
 
   -- READ frames
-  for _= 1,64 do --read 64 frames per wakeup
+  for _= 1,128 do --read 128 frames per wakeup
     local cmd, data = widget.sensor:popFrame()
     if not cmd then break end
     rx_any_count = rx_any_count + 1
@@ -492,8 +523,7 @@ local function wakeup(widget)
 
   -- SEND probes
   if not mb_have_info then
-    -- During reconnect, keep requesting INFO once per second until device responds
-    if (not mb_requested_info) or (prog.reloading and (now - (prog.lastInfoReq or 0)) > 1.0) then
+    if (not prog.lastInfoReq) or (now - prog.lastInfoReq > 1.0) then
       if widget.sensor and widget.sensor.pushFrame then
         pushMB(widget.sensor, CMD_REQUEST_INFO, {})
         prog.lastInfoReq = now
@@ -568,6 +598,7 @@ end
 local function close(widget)
   progressClose()
   resetState()
+  hardReset(widget)
   if collectgarbage then collectgarbage() end
 end
 
