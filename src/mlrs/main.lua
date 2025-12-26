@@ -40,6 +40,17 @@ local CMD_PARAM_STORE         = 13
 local T_UINT8, T_INT8, T_UINT16, T_INT16, T_LIST, T_STR6 = 0,1,2,3,4,5
 
 ------------------------------
+-- Check telemetry active
+------------------------------
+local function isTelemetryActive()
+  local tlm = system.getSource({
+    category = CATEGORY_SYSTEM_EVENT,
+    member   = TELEMETRY_ACTIVE
+  })
+  return tlm and (tlm:value() == 1)
+end
+
+------------------------------
 -- Reset state
 ------------------------------
 local function resetState()
@@ -532,9 +543,12 @@ local function wakeup(widget)
       if mcmd==CMD_INFO then
         mb_have_info = true
         mb_got_info = true
-      elseif mcmd==CMD_DEVICE_ITEM_TX or mcmd==CMD_DEVICE_ITEM_RX then
-        -- Device items can arrive before INFO; don't start PARAM load until INFO is seen.
+      elseif mcmd==CMD_DEVICE_ITEM_TX then
         mb_have_info = true
+      elseif mcmd==CMD_DEVICE_ITEM_RX then
+        if isTelemetryActive() then
+          mb_have_info = true
+        end  
       elseif mcmd==CMD_PARAM_ITEM then
         on_ITEM(widget, payload)
       elseif mcmd==CMD_PARAM_ITEM2 then
