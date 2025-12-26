@@ -57,7 +57,9 @@ local function resetState()
   fields = {}
   fieldWidgetsBuilt = false
   lastFocusedIndex = nil
-  mb_have_info, mb_params_complete = false, false
+
+  -- protocol flags
+  mb_have_info, mb_got_info, mb_params_complete = false, false, false
   mb_requested_info, mb_requested_params = false, false
 end
 
@@ -183,7 +185,7 @@ local prog = {
   startedAt = nil,
   counter = 0,
   mode = nil,            -- "load" | "save" | "reload"
-  timeout = 12.0,         -- default seconds (overridden per mode)
+  timeout = 24.0,         -- default seconds (overridden per mode)
   dlg = nil,
   -- save/reset handling
   lastRxAt = nil,        -- last time we saw any frame
@@ -229,7 +231,7 @@ local function progressOpen(title, message, speedFast, mode)
   prog.counter = 0
   prog.mode = mode or "load"
   -- adjust timeout per mode
-  prog.timeout = (prog.mode == "save") and 12.0 or 6.0
+  prog.timeout = (prog.mode == "save") and 24.0 or 12.0
   prog.lastRxAt = os.clock()
 
   prog.dlg = form.openProgressDialog({
@@ -492,6 +494,7 @@ end
 -- Wakeup loop (single loader orchestration)
 ------------------------------
 local function wakeup(widget)
+  prog.widget = widget
   local now = os.clock()
 
   -- Reacquire CRSF sensor handle if it went stale after power-cycle
@@ -526,8 +529,8 @@ local function wakeup(widget)
   end
 
   -- READ frames
-  for _= 1,128 do --read 128 frames per wakeup
-    local cmd, data = widget.sensor:popFrame()
+  for _= 1,24 do --read 24 frames per wakeup
+    local cmd, data = widget.sensor:popFrame(130)
     if not cmd then break end
     rx_any_count = rx_any_count + 1
     prog.lastRxAt = now
@@ -661,6 +664,7 @@ local function close(widget)
   resetState()
   hardReset(widget)
   if collectgarbage then collectgarbage() end
+  widget.sensor = nil
 end
 
 local function init()
