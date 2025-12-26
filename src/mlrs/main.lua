@@ -11,7 +11,7 @@ local icon = lcd and lcd.loadMask and lcd.loadMask("icon.png") or nil
 
 -- flags
 local fieldWidgetsBuilt = false         -- whether UI widgets have been created
-local mb_have_info, mb_params_complete = false, false
+local mb_have_info, mb_got_info, mb_params_complete = false, false, false
 local mb_requested_info, mb_requested_params = false, false
 local triggerSave = false
 local formFields = {}
@@ -207,10 +207,7 @@ local function progressOpen(title, message, speedFast, mode)
       if prog.dlg and prog.dlg.value then prog.dlg:value(prog.counter) end
 
       -- watchdog
-      if prog.startedAt
-        and prog.lastRxAt
-        and (prog.lastRxAt > prog.startedAt)
-        and (os.clock() - prog.startedAt) > prog.timeout then
+      if prog.lastRxAt and (os.clock() - prog.lastRxAt) > prog.timeout then
         if prog.dlg then
           prog.dlg:message("Timed out")
           prog.dlg:closeAllowed(true)
@@ -509,7 +506,11 @@ local function wakeup(widget)
       local payload = {}
       for i=2,#data do payload[#payload+1]=data[i] end
 
-      if mcmd==CMD_DEVICE_ITEM_TX or mcmd==CMD_DEVICE_ITEM_RX or mcmd==CMD_INFO then
+      if mcmd==CMD_INFO then
+        mb_have_info = true
+        mb_got_info = true
+      elseif mcmd==CMD_DEVICE_ITEM_TX or mcmd==CMD_DEVICE_ITEM_RX then
+        -- Device items can arrive before INFO; don't start PARAM load until INFO is seen.
         mb_have_info = true
       elseif mcmd==CMD_PARAM_ITEM then
         on_ITEM(widget, payload)
@@ -522,7 +523,9 @@ local function wakeup(widget)
   end
 
   -- SEND probes
-  if not mb_have_info then
+  -- Only begin PARAM sync once we have seen CMD_INFO; some modules will ignore
+  -- CMD_PARAM_REQUEST_LIST until they are fully initialised.
+  if not mb_got_info then
     if (not prog.lastInfoReq) or (now - prog.lastInfoReq > 1.0) then
       if widget.sensor and widget.sensor.pushFrame then
         pushMB(widget.sensor, CMD_REQUEST_INFO, {})
@@ -531,8 +534,8 @@ local function wakeup(widget)
       end
     end
   elseif not mb_params_complete then
-    -- Also keep asking for the param list once per second after INFO
-    if (not mb_requested_params) or (prog.reloading and (now - (prog.lastParamsReq or 0)) > 1.0) then
+    -- Keep asking for the param list once per second after INFO until complete
+    if (not prog.lastParamsReq) or ((now - prog.lastParamsReq) > 1.0) then
       if widget.sensor and widget.sensor.pushFrame then
         pushMB(widget.sensor, CMD_PARAM_REQUEST_LIST, {})
         prog.lastParamsReq = now
