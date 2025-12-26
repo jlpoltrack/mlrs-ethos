@@ -187,6 +187,7 @@ local prog = {
   dlg = nil,
   -- save/reset handling
   lastRxAt = nil,        -- last time we saw any frame
+  lastParamRxAt = nil,   -- last time we saw any PARAM_ITEM/2/3 frame
   saveMin = 1.0,         -- don't auto-complete save before this many seconds
   saveQuiet = 1.2,       -- if we've had no frames for this long after saveMin, assume power cycle and advance
   -- post-save reload handling
@@ -550,10 +551,13 @@ local function wakeup(widget)
           mb_have_info = true
         end  
       elseif mcmd==CMD_PARAM_ITEM then
+        prog.lastParamRxAt = now
         on_ITEM(widget, payload)
       elseif mcmd==CMD_PARAM_ITEM2 then
+        prog.lastParamRxAt = now
         on_ITEM2(widget, payload)
       elseif mcmd==CMD_PARAM_ITEM3 then
+        prog.lastParamRxAt = now
         on_ITEM3(widget, payload)
       end
     end
@@ -571,8 +575,13 @@ local function wakeup(widget)
       end
     end
   elseif not mb_params_complete then
-    -- Keep asking for the param list once per second after INFO until complete
-    if (not prog.lastParamsReq) or ((now - prog.lastParamsReq) > 1.0) then
+    -- Don't spam CMD_PARAM_REQUEST_LIST: it can restart/fragment the stream.
+    -- Only re-request if we appear idle (no param frames coming in).
+    local idleFor = now - (prog.lastParamRxAt or 0)
+    local canRequest = (not prog.lastParamsReq) or (now - prog.lastParamsReq > 2.0)
+    local streamIdle = (prog.lastParamRxAt == nil) or (idleFor > 1.2)
+
+    if canRequest and streamIdle then
       if widget.sensor and widget.sensor.pushFrame then
         pushMB(widget.sensor, CMD_PARAM_REQUEST_LIST, {})
         prog.lastParamsReq = now
