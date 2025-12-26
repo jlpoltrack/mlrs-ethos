@@ -531,8 +531,20 @@ local function wakeup(widget)
     if not cmd then break end
     rx_any_count = rx_any_count + 1
     prog.lastRxAt = now
-    -- any packet means the link is back
-    if prog.reloading then prog.reloading = false end
+    -- Any packet means the link is back. If we were in post-save reload,
+    -- fully restart the protocol state machine so INFO/PARAM requests resume cleanly.
+    if prog.reloading then
+      prog.reloading = false
+      prog.reloadStart = nil
+      prog.lastInfoReq = nil
+      prog.lastParamsReq = nil
+      prog.lastParamRxAt = nil
+      mb_have_info, mb_got_info, mb_params_complete = false, false, false
+      mb_requested_info, mb_requested_params = false, false
+      fieldWidgetsBuilt = false
+      -- restart settle window so we don't immediately spam while CRSF stack stabilises
+      widget._enteredAt = os.clock()
+    end
 
     if cmd==130 and data and data[1] then
       rx_vendor130_count = rx_vendor130_count + 1
