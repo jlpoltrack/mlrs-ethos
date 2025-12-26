@@ -579,31 +579,37 @@ local function wakeup(widget)
   end
 
   -- SEND probes
-  -- Only begin PARAM sync once we have seen CMD_INFO; some modules will ignore
-  -- CMD_PARAM_REQUEST_LIST until they are fully initialised.
-  if not mb_got_info then
-    if (not prog.lastInfoReq) or (now - prog.lastInfoReq > 1.0) then
-      if widget.sensor and widget.sensor.pushFrame then
-        pushMB(widget.sensor, CMD_REQUEST_INFO, {})
-        prog.lastInfoReq = now
-        mb_requested_info = true
-      end
-    end
-  elseif not mb_params_complete then
-    -- Don't spam CMD_PARAM_REQUEST_LIST: it can restart/fragment the stream.
-    -- Only re-request if we appear idle (no param frames coming in).
-    local idleFor = now - (prog.lastParamRxAt or 0)
-    local canRequest = (not prog.lastParamsReq) or (now - prog.lastParamsReq > 2.0)
-    local streamIdle = (prog.lastParamRxAt == nil) or (idleFor > 1.2)
+  -- IMPORTANT: while STORE is in progress, don't spam INFO/PARAM requests.
+  -- It can interfere with flash write / reboot and make "save" appear to never work.
+  local savingNow = (prog.mode == "save") and (not prog.reloading)
 
-    if canRequest and streamIdle then
-      if widget.sensor and widget.sensor.pushFrame then
-        pushMB(widget.sensor, CMD_PARAM_REQUEST_LIST, {})
-        prog.lastParamsReq = now
-        mb_requested_params = true
+  if not savingNow then  
+    -- Only begin PARAM sync once we have seen CMD_INFO; some modules will ignore
+    -- CMD_PARAM_REQUEST_LIST until they are fully initialised.
+    if not mb_got_info then
+      if (not prog.lastInfoReq) or (now - prog.lastInfoReq > 1.0) then
+        if widget.sensor and widget.sensor.pushFrame then
+          pushMB(widget.sensor, CMD_REQUEST_INFO, {})
+          prog.lastInfoReq = now
+          mb_requested_info = true
+        end
+      end
+    elseif not mb_params_complete then
+      -- Don't spam CMD_PARAM_REQUEST_LIST: it can restart/fragment the stream.
+      -- Only re-request if we appear idle (no param frames coming in).
+      local idleFor = now - (prog.lastParamRxAt or 0)
+      local canRequest = (not prog.lastParamsReq) or (now - prog.lastParamsReq > 2.0)
+      local streamIdle = (prog.lastParamRxAt == nil) or (idleFor > 1.2)
+
+      if canRequest and streamIdle then
+        if widget.sensor and widget.sensor.pushFrame then
+          pushMB(widget.sensor, CMD_PARAM_REQUEST_LIST, {})
+          prog.lastParamsReq = now
+          mb_requested_params = true
+        end
       end
     end
-  end
+  end  
 
   -- PROGRESS orchestration (single dialog)
   -- Ensure loader is open/updated whenever we are missing info/params
