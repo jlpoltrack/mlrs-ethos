@@ -79,8 +79,12 @@ end
 
 local function u8(p,i) return p[i+1] & 0xFF end
 local function i8(p,i) local v=u8(p,i); if v>127 then v=v-256 end; return v end
-local function u16(p,i) return (u8(p,i)<<8) + u8(p,i+1) end
-local function i16(p,i) local v=u16(p,i); if v>32767 then v=v-65536 end; return v end
+local function u16(p,i) return u8(p,i) + (u8(p,i+1) << 8) end
+local function i16(p,i)
+  local v = u16(p,i)
+  if v > 32767 then v = v - 65536 end
+  return v
+end
 
 local function mb_value_by_type(p,i,typ)
   if     typ==T_UINT8  then return u8(p,i),1
@@ -113,6 +117,31 @@ local function pushMB(sensor, cmd, payload)
   for i=1,need do data[#data+1]=0 end
   for i=1,#payload do data[3+i]=payload[i] end
   return sensor:pushFrame(129, data)
+end
+
+-- Parse LIST options exactly like the EdgeTX reference:
+-- bytes are a comma-separated string; stop at first NUL; clear high-bit.
+local function parse_list_options_csv_from_payload(payload, startOfs, endOfs)
+  local bytes = {}
+  for ofs = startOfs, endOfs do
+    local b = u8(payload, ofs)
+    if not b or b == 0 then break end
+    bytes[#bytes+1] = b
+  end
+
+  local s = {}
+  for _, b in ipairs(bytes) do
+    s[#s+1] = string.char(b & 0x7F)
+  end
+  local str = table.concat(s)
+
+  local opts = {}
+  for part in string.gmatch(str .. ",", "([^,]+)") do
+    -- trim
+    part = part:match("^%s*(.-)%s*$")
+    if part ~= "" then opts[#opts+1] = part end
+  end
+  return opts
 end
 
 -- Build f.options from ITEM2/ITEM3 with high-bit cleared
@@ -408,10 +437,16 @@ local function on_ITEM(widget, payload)
   if f.typ==T_LIST and f.options==nil then f.options = {} end
 
   if f.typ == T_LIST then
+    -- ITEM carries the option CSV in bytes 2..23 AND the current value in byte 18.
+    -- Note: 18 is within 2..23, but the reference still uses this layout.
+    f.options = parse_list_options_csv_from_payload(payload, 2, 23)
+    f.min, f.max = 0, math.max(#(f.options or {}) - 1, 0)
     f.value = (u8(payload,18) or 0) & 0x7F
-  else
-    f.value = select(1, mb_value_by_type(payload,18,f.typ))
+    if f.value > f.max then f.value = f.max end
+    return
   end
+
+  f.value = select(1, mb_value_by_type(payload,18,f.typ))
 end
 
 local function on_ITEM2(widget, payload)
@@ -419,28 +454,16 @@ local function on_ITEM2(widget, payload)
   local k = idx+1; local f = fields[k]; if not f then return end
 
   if f.typ==T_LIST then
-    f.options = {}
-    local opt = {}
-    for ofs = 2, 23 do
-      local b = u8(payload, ofs)
-      if not b then break end
-      if b == 0 then
-        if #opt > 0 then f.options[#f.options+1] = table.concat(opt); opt = {} end
-      else
-        opt[#opt+1] = string.char(b)
-      end
+   -- EdgeTX-style: ITEM2 continues the comma-separated option string
+    -- (some firmwares may send options split across ITEM/ITEM2/ITEM3).
+    -- For now we treat ITEM2 as a full replacement if it contains data.
+    local opts = parse_list_options_csv_from_payload(payload, 2, 23)
+    if opts and #opts > 0 then
+      f.options = opts
+    else
+      f.options = f.options or {}
     end
-    if #opt > 0 then f.options[#f.options+1] = table.concat(opt) end
-
-    if #f.options == 1 and f.options[1]:find(",") then
-      local parts = {}
-      for part in string.gmatch(f.options[1], "([^,]+)") do
-        parts[#parts+1] = (part:gsub("%z","")):match("^%s*(.-)%s*$")
-      end
-      f.options = parts
-    end
-
-    f.min, f.max = 0, math.max(#f.options - 1, 0)
+    f.min, f.max = 0, math.max(#(f.options or {}) - 1, 0)
     if type(f.value)=="number" and f.value > f.max then f.value = f.max end
   else
     f.min = select(1, mb_value_by_type(payload, 1, f.typ))
