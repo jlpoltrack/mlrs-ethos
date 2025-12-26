@@ -40,6 +40,17 @@ local CMD_PARAM_STORE         = 13
 local T_UINT8, T_INT8, T_UINT16, T_INT16, T_LIST, T_STR6 = 0,1,2,3,4,5
 
 ------------------------------
+-- Drain frames
+------------------------------
+local function drainFrames(sensor, max)
+  max = max or 64
+  for _ = 1, max do
+    local cmd, _ = sensor:popFrame(130)
+    if not cmd then break end
+  end
+end
+
+------------------------------
 -- Check telemetry active
 ------------------------------
 local function isTelemetryActive()
@@ -75,6 +86,7 @@ local function create()
     sensor = { popFrame=function(self) return crsf.popFrame() end,
                pushFrame=function(self,id,data) return crsf.pushFrame(id,data) end }
   end
+  drainFrames(sensor)
   return { sensor = sensor }
 end
 
@@ -199,6 +211,7 @@ local prog = {
 }
 
 local function hardReset(widget)
+
   -- stop/clear progress UI state
   prog.open = false
   prog.speedFast = false
@@ -639,8 +652,9 @@ local function wakeup(widget)
     else
       -- Device often power-cycles on STORE; if we go quiet for a bit, treat as success → reload
       local sinceStart = now - (prog.startedAt or now)
-      local sinceRx = now - (prog.lastRxAt or prog.startedAt or now)
-      if sinceStart > prog.saveMin and sinceRx > prog.saveQuiet then
+      -- Only treat PARAM frames as "activity" so other link traffic doesn't prevent completion.
+      local sinceParam = now - (prog.lastParamRxAt or prog.startedAt or now)
+      if sinceStart > prog.saveMin and sinceParam > prog.saveQuiet then
         prog.reloading = true
         prog.reloadStart = now
         mb_have_info, mb_params_complete = false, false
