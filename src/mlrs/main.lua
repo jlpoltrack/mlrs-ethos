@@ -1,7 +1,7 @@
 --[[
   Copyright (C) 2025 Rob Thomson
   GPLv3 — https://www.gnu.org/licenses/gpl-3.0.en.html
-]] --
+]]--
 
 local BASE = "RADIO:/scripts/mlrs"
 
@@ -16,6 +16,7 @@ local api
 local requested = false
 local loadedParams = false
 
+local paramsRequested = false
 local statusMsg = "Starting…"
 local errMsg
 
@@ -38,6 +39,27 @@ end
 local function setErr(s)
   errMsg = s
   dirty = true
+end
+
+------------------------------------------------------------
+-- UI helpers (matching the upstream script style)
+------------------------------------------------------------
+local function buildChoicesFromOptions(opts)
+  local choices = {}
+  opts = opts or {}
+  for i = 1, #opts do
+    local label = tostring(opts[i] or "")
+    if label ~= "-" and label ~= "" then
+      choices[#choices + 1] = { label, i - 1 } -- 0-based values
+    end
+  end
+  if #choices == 0 then choices = { { "-", 0 } } end
+  return choices
+end
+
+local function safeStatic(label, value)
+  local line = form.addLine(label or "")
+  form.addStaticText(line, nil, value or "")
 end
 
 ------------------------------------------------------------
@@ -84,22 +106,22 @@ local function requestAllParams()
     params = res.data and res.data.params or nil
     loadedParams = true
     setStatus("Params loaded")
+    dirty = true
   end, { full = true, deadlineS = 30.0 })
 end
 
 local function doSave()
   if not api then return end
-  setStatus("Saving…")
   setErr(nil)
-
+  setStatus("Saving…")
   api:store(function(res)
     if not res.ok then
       setErr("Store: " .. fmt(res.err))
       setStatus("Error")
       return
     end
-    -- After store(), device may pause / reboot; we mark dirty and let user reload/refresh.
-    setStatus("Saved (reloading recommended)")
+    setStatus("Saved")
+    dirty = true
   end)
 end
 
@@ -108,6 +130,7 @@ local function doReload()
   api:reset()
   requested = false
   loadedParams = false
+  paramsRequested = false
   dev, info, params = nil, nil, nil
   setErr(nil)
   setStatus("Reloading…")
@@ -117,12 +140,31 @@ end
 ------------------------------------------------------------
 -- Form builder (Forms API)
 ------------------------------------------------------------
+local function commitParam(p, newValue)
+  if not api or not p then return end
+  setErr(nil)
+  setStatus("Setting " .. fmt(p.name) .. "…")
+  api:setParam(p.idx0, newValue, function(res)
+    if not res.ok then
+      setErr("Set: " .. fmt(res.err))
+      setStatus("Error")
+      return
+    end
+    p.value = newValue
+    setStatus("Ready")
+    dirty = true
+  end)
+end
+
+------------------------------------------------------------
+-- Button helper
+------------------------------------------------------------
 local function addButtonLine(label, buttonText, pressFn)
-  local line = form.addLine(label)
-  -- Ethos supports addButton (since 1.5.10) and addTextButton (deprecated). :contentReference[oaicite:1]{index=1}
+  local line = form.addLine(label or "")
   if form.addButton then
     form.addButton(line, nil, { text = buttonText, press = pressFn })
   else
+    -- older Ethos
     form.addTextButton(line, nil, buttonText, pressFn)
   end
 end
@@ -139,52 +181,78 @@ local function buildForm()
   local tx = dev and dev.tx
   local rx = dev and dev.rx
 
-  form.addStaticText(form.addLine("Status"), nil, errMsg and ("ERR: " .. errMsg) or statusMsg)
+  -- One compact status line
+  safeStatic("Status", errMsg and ("ERR: " .. errMsg) or statusMsg)
 
-  form.addStaticText(form.addLine("TX Name"), nil, fmt(tx and tx.name))
-  form.addStaticText(form.addLine("TX Ver"),  nil, fmt(tx and tx.version_str))
+  addButtonLine("", "Save", function() doSave() end)
 
-  --form.addStaticText(form.addLine("RX Name"), nil, fmt(rx and rx.name))
-  form.addStaticText(form.addLine("RX Ver"),  nil, fmt(rx and rx.version_str))
+  -- A tiny bit of identity is handy, but keep it minimal
+  if tx and tx.name then
+    safeStatic("TX", fmt(tx.name) .. " " .. fmt(tx.version_str))
+  end
+  if rx and rx.name then
+    safeStatic("RX", fmt(rx.name) .. " " .. fmt(rx.version_str))
+  end
 
-  form.addStaticText(form.addLine("Tx Power"), nil, info and (fmt(info.tx_power_dbm) .. " dBm") or "---")
-  form.addStaticText(form.addLine("Rx Power"), nil, info and (fmt(info.rx_power_dbm) .. " dBm") or "---")
-  form.addStaticText(form.addLine("Sensitivity"), nil, info and (fmt(info.receiver_sensitivity) .. " dBm") or "---")
-  form.addStaticText(form.addLine("Diversity"), nil, info and ("T" .. fmt(info.tx_diversity) .. " / R" .. fmt(info.rx_diversity)) or "---")
+  -- Avoid building a giant partial form while params are still arriving
+  if not loadedParams or not params then
+    safeStatic("", "Loading parameters…")
+    return
+  end
 
-  --form.addStaticText(form.addLine("Params loaded"), nil, loadedParams and "Yes" or "No")
+  -- Render ALL params in index order (as received/decoded)
+  for i = 1, #params do
+    local p = params[i]
+    if p and p.name and p.name ~= "" then
+      local label = p.name
+      if p.unit and p.unit ~= "" then
+        label = label .. " (" .. p.unit .. ")"
+      end
+      local line = form.addLine(label)
 
-  addButtonLine("Transmitter", "Setup", function()
-    loadTransmitter()
-  end)
+      local editable = (p.editable ~= false)
 
-  addButtonLine("Receiver", "Setup", function()
-    loadReceiver()
-  end)
-
-  --[[
-  addButtonLine("Actions", "Reload", function()
-    doReload()
-  end)
-
-  addButtonLine(" ", "Load params", function()
-    requestAllParams()
-  end)
-
-  addButtonLine(" ", "Save", function()
-    doSave()
-  end)
-  ]]--
-
-  -- You’ll replace the below with your real UI pages.
-  if loadedParams and params then
-    local count = 0
-    for i = 1, #params do
-      local p = params[i]
-      if p and p.name then count = count + 1 end
-      if count >= 5 then break end
+      if not editable then
+        if p.typ == 4 and p.options and #p.options > 0 then
+          form.addStaticText(line, nil, p.options[(p.value or 0) + 1] or fmt(p.value))
+        else
+          form.addStaticText(line, nil, fmt(p.value))
+        end
+      else
+        if p.typ == 4 then
+          -- LIST: Ethos expects choices = { {"Label", value}, ... }
+          local choices = buildChoicesFromOptions(p.options)
+          local getter = function()
+            local v = tonumber(p.value) or 0
+            if v < 0 then v = 0 end
+            if v > (#choices - 1) then v = (#choices - 1) end
+            return v
+          end
+          local setter = function(val)
+            commitParam(p, tonumber(val) or 0)
+          end
+          if #choices == 1 then
+            -- nothing meaningful to choose; render static to avoid warnings
+            form.addStaticText(line, nil, tostring(p.options and p.options[1] or "-"))
+          else
+            local w = form.addChoiceField(line, nil, choices, getter, setter)
+            if w and w.enableInstantChange then w:enableInstantChange(true) end
+          end
+        elseif p.typ == 5 then
+          -- STR6: shown read-only (CMD_PARAM_SET is 1-byte in mlrs.lua currently)
+          form.addStaticText(line, nil, fmt(p.value))
+        else
+          -- numeric types
+          local min = p.min or 0
+          local max = p.max or 65535
+          local getter = function() return p.value or 0 end
+          local setter = function(val) commitParam(p, val) end
+          local w = form.addNumberField(line, nil, min, max, getter, setter)
+          if w and p.unit and w.suffix then w:suffix(p.unit) end
+          if w and w.enableInstantChange then w:enableInstantChange(true) end
+        end
+      end
     end
-    form.addStaticText(form.addLine("Param preview"), nil, "First 5 loaded (UI to come)")
   end
 end
 
@@ -213,6 +281,12 @@ end
 local function wakeup(_)
   if not api then return end
   api:processQueue(24)
+
+  -- Start param load exactly once after basics are ready
+  if requested and not paramsRequested and not loadedParams and not errMsg and statusMsg == "Ready" then
+    paramsRequested = true
+    requestAllParams()
+  end
 
   -- If data arrived / state changed, rebuild the form (debounced)
   if dirty then
