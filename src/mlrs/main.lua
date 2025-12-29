@@ -184,8 +184,6 @@ local function buildForm()
   -- One compact status line
   safeStatic("Status", errMsg and ("ERR: " .. errMsg) or statusMsg)
 
-  addButtonLine("", "Save", function() doSave() end)
-
   -- A tiny bit of identity is handy, but keep it minimal
   if tx and tx.name then
     safeStatic("TX", fmt(tx.name) .. " " .. fmt(tx.version_str))
@@ -208,17 +206,11 @@ local function buildForm()
       if p.unit and p.unit ~= "" then
         label = label .. " (" .. p.unit .. ")"
       end
-      local line = form.addLine(label)
+      local line = nil
 
       local editable = (p.editable ~= false)
 
-      if not editable then
-        if p.typ == 4 and p.options and #p.options > 0 then
-          form.addStaticText(line, nil, p.options[(p.value or 0) + 1] or fmt(p.value))
-        else
-          form.addStaticText(line, nil, fmt(p.value))
-        end
-      else
+      if editable then
         if p.typ == 4 then
           -- LIST: Ethos expects choices = { {"Label", value}, ... }
           local choices = buildChoicesFromOptions(p.options)
@@ -231,15 +223,14 @@ local function buildForm()
           local setter = function(val)
             commitParam(p, tonumber(val) or 0)
           end
-          if #choices == 1 then
-            -- nothing meaningful to choose; render static to avoid warnings
-            form.addStaticText(line, nil, tostring(p.options and p.options[1] or "-"))
-          else
+          if #choices > 1 then
+            line = form.addLine(label)
             local w = form.addChoiceField(line, nil, choices, getter, setter)
             if w and w.enableInstantChange then w:enableInstantChange(true) end
           end
         elseif p.typ == 5 then
           -- STR6: shown read-only (CMD_PARAM_SET is 1-byte in mlrs.lua currently)
+          line = form.addLine(label)
           form.addStaticText(line, nil, fmt(p.value))
         else
           -- numeric types
@@ -247,12 +238,17 @@ local function buildForm()
           local max = p.max or 65535
           local getter = function() return p.value or 0 end
           local setter = function(val) commitParam(p, val) end
+          line = form.addLine(label)
           local w = form.addNumberField(line, nil, min, max, getter, setter)
           if w and p.unit and w.suffix then w:suffix(p.unit) end
           if w and w.enableInstantChange then w:enableInstantChange(true) end
         end
       end
     end
+  end
+
+  if #params > 0 then
+    addButtonLine("", "Save Params", doSave)
   end
 end
 
