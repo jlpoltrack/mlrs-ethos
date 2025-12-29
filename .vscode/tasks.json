@@ -35,9 +35,6 @@
         "${workspaceFolder}\\.vscode\\scripts\\deploy.py",
         "--fileext", "fast",
         "--radio",
-        "--lang", "en",
-        "--step", "i18n",
-        "--step", "soundpack"   
       ],
       "problemMatcher": [],
       "presentation": { "reveal": "always", "panel": "shared", "clear": true }
@@ -50,9 +47,6 @@
         "${workspaceFolder}\\.vscode\\scripts\\deploy.py",
         "--radio",
         "--radio-debug",
-        "--lang", "en",
-        "--step", "i18n",
-        "--step", "soundpack"   
       ],
       "problemMatcher": [],
       "presentation": { "reveal": "always", "panel": "shared", "clear": true }
@@ -65,10 +59,7 @@
         "${workspaceFolder}\\.vscode\\scripts\\deploy.py",
         "--fileext", "fast",
         "--radio",
-        "--radio-debug",
-        "--lang", "en",
-        "--step", "i18n",
-        "--step", "soundpack"   
+        "--radio-debug", 
       ],
       "problemMatcher": [],
       "presentation": { "reveal": "always", "panel": "shared", "clear": true }
@@ -81,9 +72,7 @@
         "${workspaceFolder}\\.vscode\\scripts\\deploy.py",
         "--radio",
         "--connect-only",
-        "--lang", "en",
-        "--step", "i18n",
-        "--step", "soundpack"   
+        "--lang", "en", 
       ],
       "problemMatcher": [],
       "presentation": { "reveal": "always", "panel": "shared", "clear": true }
