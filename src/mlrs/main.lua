@@ -264,6 +264,7 @@ local function create()
 
   requested = false
   loadedParams = false
+  paramsRequested = false
   dev, info, params = nil, nil, nil
   errMsg = nil
   statusMsg = "Starting…"
@@ -292,7 +293,25 @@ end
 
 local function event(_) end
 local function paint(_) end
-local function close(_) end
+
+local function close(_)
+  -- Ensure a clean restart next time the tool is opened
+  if api and api.reset then
+    api:reset()
+  end
+  requested = false
+  loadedParams = false
+  paramsRequested = false
+  dev, info, params = nil, nil, nil
+  errMsg = nil
+  statusMsg = "Closed"
+  dirty = true
+
+  -- Optional: fully drop the api instance to avoid any lingering queued callbacks
+  api = nil
+  collectgarbage("collect")
+end
+
 
 local function init()
   local v = system.getVersion()
