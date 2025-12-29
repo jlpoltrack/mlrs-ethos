@@ -144,7 +144,7 @@ local function buildForm()
   form.addStaticText(form.addLine("TX Name"), nil, fmt(tx and tx.name))
   form.addStaticText(form.addLine("TX Ver"),  nil, fmt(tx and tx.version_str))
 
-  form.addStaticText(form.addLine("RX Name"), nil, fmt(rx and rx.name))
+  --form.addStaticText(form.addLine("RX Name"), nil, fmt(rx and rx.name))
   form.addStaticText(form.addLine("RX Ver"),  nil, fmt(rx and rx.version_str))
 
   form.addStaticText(form.addLine("Tx Power"), nil, info and (fmt(info.tx_power_dbm) .. " dBm") or "---")
@@ -152,8 +152,17 @@ local function buildForm()
   form.addStaticText(form.addLine("Sensitivity"), nil, info and (fmt(info.receiver_sensitivity) .. " dBm") or "---")
   form.addStaticText(form.addLine("Diversity"), nil, info and ("T" .. fmt(info.tx_diversity) .. " / R" .. fmt(info.rx_diversity)) or "---")
 
-  form.addStaticText(form.addLine("Params loaded"), nil, loadedParams and "Yes" or "No")
+  --form.addStaticText(form.addLine("Params loaded"), nil, loadedParams and "Yes" or "No")
 
+  addButtonLine("Transmitter", "Setup", function()
+    loadTransmitter()
+  end)
+
+  addButtonLine("Receiver", "Setup", function()
+    loadReceiver()
+  end)
+
+  --[[
   addButtonLine("Actions", "Reload", function()
     doReload()
   end)
@@ -165,6 +174,7 @@ local function buildForm()
   addButtonLine(" ", "Save", function()
     doSave()
   end)
+  ]]--
 
   -- You’ll replace the below with your real UI pages.
   if loadedParams and params then
