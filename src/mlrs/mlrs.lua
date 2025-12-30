@@ -508,6 +508,10 @@ function M.bindStart(self, cb)
   return enqueue(self, { type = "BIND_START", cb = cb, deadline = now() + 6.0 })
 end
 
+function M.bindStop(self, cb)
+  return enqueue(self, { type = "BIND_STOP", cb = cb, deadline = now() + 6.0 })
+end
+
 function M.bootloader(self, cb)
   return enqueue(self, { type = "BOOT", cb = cb, deadline = now() + 6.0 })
 end
@@ -640,6 +644,16 @@ function M.processQueue(self, maxFrames)
   if req.type == "BIND_START" then
     if not req.sent then
       pushMB(self.sensor, CMD_BIND_START, {})
+      req.sent = true
+      finish(req, true, { sent = true })
+    end
+    return
+  end
+
+  -- ---- BIND_STOP ----
+  if req.type == "BIND_STOP" then
+    if not req.sent then
+      pushMB(self.sensor, CMD_BIND_STOP, {})
       req.sent = true
       finish(req, true, { sent = true })
     end
