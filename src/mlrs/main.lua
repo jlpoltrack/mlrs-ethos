@@ -28,6 +28,9 @@ local params
 local dirty = true
 local lastBuildAt = 0
 
+local bindActive = false
+local bindEndAt = 0
+
 local function now() return os.clock() end
 local function fmt(x) return (x == nil) and "---" or tostring(x) end
 
@@ -39,6 +42,43 @@ end
 local function setErr(s)
   errMsg = s
   dirty = true
+end
+
+------------------------------------------------------------
+-- Bind helpers
+------------------------------------------------------------
+local function doBindStart()
+  if not api then return end
+  setErr(nil)
+  setStatus("Starting bind…")
+  api:bindStart(function(res)
+    if not res.ok then
+      setErr("BindStart: " .. fmt(res.err))
+      setStatus("Error")
+      return
+    end
+    bindActive = true
+    bindEndAt = now() + 20.0 -- auto stop after 20s
+    setStatus("Bind mode (20s)…")
+    dirty = true
+  end)
+end
+
+local function doBindStop()
+  if not api then return end
+  setErr(nil)
+  setStatus("Stopping bind…")
+  api:bindStop(function(res)
+    if not res.ok then
+      setErr("BindStop: " .. fmt(res.err))
+      setStatus("Error")
+      return
+    end
+    bindActive = false
+    bindEndAt = 0
+    setStatus("Bind stopped")
+    dirty = true
+  end)
 end
 
 ------------------------------------------------------------
@@ -198,6 +238,15 @@ local function buildForm()
     return
   end
 
+  -- Bind control (available even while params are loading)
+  if bindActive then
+    safeStatic("Bind", "ACTIVE (auto-stop in " .. string.format("%.0f", math.max(0, bindEndAt - now())) .. "s)")
+    addButtonLine("", "Stop Bind", doBindStop)
+  else
+    safeStatic("Bind", "Idle")
+    addButtonLine("", "Bind", doBindStart)
+  end
+
   -- Render ALL params in index order (as received/decoded)
   for i = 1, #params do
     local p = params[i]
@@ -279,10 +328,17 @@ local function wakeup(_)
   if not api then return end
   api:processQueue(24)
 
+  -- auto-stop bind after timeout
+  if bindActive and bindEndAt and now() >= bindEndAt then
+    doBindStop()
+  end  
+
   -- Start param load exactly once after basics are ready
   if requested and not paramsRequested and not loadedParams and not errMsg and statusMsg == "Ready" then
     paramsRequested = true
     requestAllParams()
+    bindActive = false
+    bindEndAt = 0    
   end
 
   -- If data arrived / state changed, rebuild the form (debounced)
@@ -306,6 +362,8 @@ local function close(_)
   errMsg = nil
   statusMsg = "Closed"
   dirty = true
+  bindActive = false
+  bindEndAt = 0  
 
   -- Optional: fully drop the api instance to avoid any lingering queued callbacks
   api = nil
