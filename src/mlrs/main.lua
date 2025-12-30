@@ -103,6 +103,23 @@ local function safeStatic(label, value)
 end
 
 ------------------------------------------------------------
+
+------------------------------------------------------------
+-- STR6 (Bind Phrase) helpers
+------------------------------------------------------------
+local function sanitizeBindPhrase(s)
+  s = tostring(s or "")
+  s = string.lower(s)
+  -- Allowed: a-z 0-9 _ # - .
+  s = s:gsub("[^a-z0-9_#%-%.-]", "_")
+  if #s > 6 then
+    s = s:sub(1, 6)
+  elseif #s < 6 then
+    s = s .. string.rep("_", 6 - #s)
+  end
+  return s
+end
+
 -- MLRS request chain
 ------------------------------------------------------------
 local function requestBasics()
@@ -278,10 +295,18 @@ local function buildForm()
             if w and w.enableInstantChange then w:enableInstantChange(true) end
           end
         elseif p.typ == 5 then
-          -- STR6: shown read-only (CMD_PARAM_SET is 1-byte in mlrs.lua currently)
-          line = form.addLine(label)
-          form.addStaticText(line, nil, fmt(p.value))
-        else
+  -- STR6: use a text field (writes 6 chars as CMD_PARAM_SET idx + 6 bytes)
+  line = form.addLine(label)
+  local getter = function()
+    return sanitizeBindPhrase(p.value)
+  end
+  local setter = function(newValue)
+    commitParam(p, sanitizeBindPhrase(newValue))
+  end
+  local w = form.addTextField(line, nil, getter, setter)
+  -- Avoid spamming writes while editing (Ethos versions vary)
+  if w and w.enableInstantChange then w:enableInstantChange(false) end
+else
           -- numeric types
           local min = p.min or 0
           local max = p.max or 65535
