@@ -620,13 +620,27 @@ function M.processQueue(self, maxFrames)
 
   -- ---- SET_PARAM ----
   if req.type == "SET_PARAM" then
-    if not req.sent then
-      pushMB(self.sensor, CMD_PARAM_SET, { req.idx0 & 0xFF, (req.value or 0) & 0xFF })
-      req.sent = true
-      finish(req, true, { sent = true })
+  if not req.sent then
+    local payload
+    if type(req.value) == "string" then
+      -- STR6: send idx0 + 6 ASCII bytes (padded/truncated by UI)
+      payload = { req.idx0 & 0xFF }
+      local s = tostring(req.value or "")
+      for i = 1, 6 do
+        local b = string.byte(s, i) or 0
+        payload[#payload + 1] = b & 0xFF
+      end
+    else
+      -- numeric / list: 1 byte value
+      payload = { req.idx0 & 0xFF, (req.value or 0) & 0xFF }
     end
-    return
+    pushMB(self.sensor, CMD_PARAM_SET, payload)
+    req.sent = true
+    finish(req, true, { sent = true })
   end
+  return
+end
+
 
   -- ---- STORE ----
   if req.type == "STORE" then
