@@ -2,7 +2,7 @@
   Copyright (C) 2026 Rob Thomson
   GPLv3 — https://www.gnu.org/licenses/gpl-3.0.en.html
 
-  Date: 2026-01-02
+  Date: 2026-01-11
 ]]--
 
 local BASE = "RADIO:/scripts/mlrs"
@@ -10,7 +10,7 @@ local BASE = "RADIO:/scripts/mlrs"
 local mlrs = assert(loadfile(BASE .. "/mlrs.lua"))()
 
 ------------------------------------------------------------
--- Singleton state (forms app is typically single-instance)
+-- singleton state (forms app is typically single-instance)
 ------------------------------------------------------------
 local icon = lcd and lcd.loadMask and lcd.loadMask(BASE .. "/icon.png") or nil
 
@@ -26,24 +26,25 @@ local errMsg
 local dev -- {tx=..., rx=..., info=...}
 local info
 local params
+local pendingInfoReq = false  -- track if an info request is in flight
 
 local bindActive = false
 local bindEndAt = 0
 
 local hasUnsavedChanges = false
-local lastRxAvailable = nil  -- track RX connection state changes
-local lastInfoPollAt = 0     -- for periodic INFO refresh
+local lastRxAvailable = nil  -- track rx connection state changes
+local lastInfoPollAt = 0     -- for periodic info refresh
 
 local function now() return os.clock() end
 local function fmt(x) return (x == nil) and "---" or tostring(x) end
 
--- Dirty flags for UI optimization
+-- dirty flags for ui optimization
 local dirtyHeader = false
 local dirtyBind = false
 local dirtySave = false
 
 ------------------------------------------------------------
--- UI handles (keep widget refs, update in-place)
+-- ui handles (keep widget refs, update in-place)
 ------------------------------------------------------------
 local ui = {
   built = false,          -- structure built for params screen
@@ -62,7 +63,7 @@ local ui = {
   param = {},             -- ui.param[idx0] = field handle
 }
 
--- Cached widget values to avoid redundant calls to safeCall(..., "value", ...)
+-- cached widget values to avoid redundant calls to safecall(..., "value", ...)
 local ui_cache = {
   status = "",
   tx = "",
@@ -71,7 +72,7 @@ local ui_cache = {
   saveHint = "",
 }
 
--- Structural rebuild flag (ONLY for structure changes)
+-- structural rebuild flag (only for structure changes)
 local dirtyForm = true
 
 local function safeCall(obj, method, ...)
@@ -100,6 +101,7 @@ local function resetState(msg)
   lastStatusText = ""
   bindActive = false
   bindEndAt = 0
+  pendingInfoReq = false
 
   ui.built = false
   ui.builtLoading = false
@@ -165,7 +167,7 @@ local function buildChoicesFromOptions(opts)
   for i = 1, #opts do
     local label = tostring(opts[i] or "")
     if label ~= "-" and label ~= "" then
-      -- Ethos choice tables are usually { {label, value}, ... }
+      -- ethos choice tables are usually { {label, value}, ... }
       choices[#choices + 1] = { label, i - 1 } -- 0-based values
     end
   end
@@ -175,7 +177,7 @@ local function buildChoicesFromOptions(opts)
   return choices
 end
 
-local function sanitizeBindPhrase(s)
+local function formatStr6(s)
   s = tostring(s or "")
   s = string.lower(s)
   s = s:gsub("[^a-z0-9_#%-%.-]", "_")
@@ -188,7 +190,7 @@ local function sanitizeBindPhrase(s)
 end
 
 ------------------------------------------------------------
--- Bind helpers
+-- bind helpers
 ------------------------------------------------------------
 local function doBindStart()
   if not api then return end
@@ -271,7 +273,8 @@ local function requestAllParams()
   if not api then return end
   setErr(nil)
 
-  -- skip RX params if no receiver connected
+  -- skip rx params if no receiver connected
+  -- note: identifying rx params by "Rx " prefix is common but slightly brittle
   local skipRx = (info and info.rx_available ~= 1)
   
   if skipRx then
@@ -303,12 +306,12 @@ local function requestAllParams()
 end
 
 local function requestRxParams()
-  -- called when RX connects after initial TX-only load
+  -- called when rx connects after initial tx-only load
   if not api or not params then return end
   setStatus("Loading Rx params…")
   setErr(nil)
 
-  -- first, refresh the RX device item to get name/version
+  -- first, refresh the rx device item to get name/version
   api:refreshRxItem(function(res)
     if res.ok and res.data and res.data.rx then
       dev = dev or {}
@@ -317,8 +320,8 @@ local function requestRxParams()
     end
   end)
 
-  -- clear cached RX params (from the defaults TX returned when RX was offline)
-  -- keep TX params intact
+  -- clear cached rx params (from the defaults tx returned when rx was offline)
+  -- keep tx params intact
   local model = api.model
   if model and model.params then
     for i, p in pairs(model.params) do
@@ -336,31 +339,33 @@ local function requestRxParams()
     end
   end
   
-  -- request all params - will skip TX (already loaded) and fetch fresh RX
+  -- request all params - will skip tx (already loaded) and fetch fresh rx
   api:getAllParams(function(res)
     if not res.ok then
       setErr("RxParams: " .. fmt(res.err))
       setStatus("Error")
       return
     end
-    -- merge new params into existing (fresh RX params will be added)
+    -- merge new params into existing (fresh rx params will be added)
     local newParams = res.data and res.data.params or {}
     for i, p in pairs(newParams) do
       params[i] = p
     end
     setStatus("Rx params loaded")
-    dirtyForm = true  -- rebuild UI to show RX params
+    dirtyForm = true  -- rebuild ui to show rx params
   end, { full = true, deadlineS = mlrs.DEFAULTS.PARAM_LOAD_DEADLINE_S, skipRx = false })
 end
 
 local function pollInfo(tNow)
-  -- periodically refresh INFO to detect RX connection changes
-  if not api or not loadedParams then return end
+  -- periodically refresh info to detect rx connection changes
+  if not api or not loadedParams or pendingInfoReq then return end
   tNow = tNow or now()
   if (tNow - lastInfoPollAt) < 1.0 then return end  -- poll every 1s
   lastInfoPollAt = tNow
 
+  pendingInfoReq = true
   api:refreshInfo(function(res)
+    pendingInfoReq = false
     if not res.ok then return end
     local newInfo = res.data and res.data.info or nil
     if newInfo then
@@ -395,7 +400,7 @@ local function updateParamWidget(p)
     -- LIST choices
     local choices = buildChoicesFromOptions(p.options)
     safeCall(f, "values", choices)
-    -- Some firmwares expose min/max too; harmless if absent
+    -- some firmwares expose min/max too; harmless if absent
     safeCall(f, "minimum", 0)
     safeCall(f, "maximum", math.max(#choices - 1, 0))
   elseif p.paramType ~= mlrs.TYPES.STR6 then
@@ -494,13 +499,13 @@ local function buildParamsForm()
   ui.param = {}
   for k, _ in pairs(ui_cache) do ui_cache[k] = nil end
 
-  -- Status
+  -- status
   do
     local line = form.addLine("Status")
     ui.status = form.addStaticText(line, nil, statusText())
   end
 
-  -- TX / RX identity
+  -- tx / rx identity
   do
     local line = form.addLine("TX")
     ui.tx = form.addStaticText(line, nil, "")
@@ -508,13 +513,13 @@ local function buildParamsForm()
     ui.rx = form.addStaticText(line2, nil, "")
   end
 
-  -- Script version
+  -- script version
   do
     local line = form.addLine("Script")
     form.addStaticText(line, nil, "mLRS Lua v" .. mlrs.VERSION)
   end
 
-  -- Bind section (status + one button; press fn decides action)
+  -- bind section (status + one button; press fn decides action)
   do
     local line = form.addLine("Bind")
     ui.bindStatus = form.addStaticText(line, nil, "")
@@ -523,15 +528,15 @@ local function buildParamsForm()
     end)
   end
 
-  -- Params
+  -- params
   local rxAvailable = (info and info.rx_available == 1)
   if params then
     for i, p in pairs(params) do
       if p and p.name and p.name ~= "" then
-        -- hide RX params when receiver not connected
+        -- hide rx params when receiver not connected
         local isRxParam = (p.name:sub(1, 3) == "Rx ")
         if isRxParam and not rxAvailable then
-          -- skip this param in UI
+          -- skip this param in ui
         else
           local label = p.name
           if p.unit and p.unit ~= "" then
@@ -565,10 +570,10 @@ local function buildParamsForm()
           elseif p.paramType == mlrs.TYPES.STR6 then
             -- STR6
             local getter = function()
-              return sanitizeBindPhrase(p.value)
+              return formatStr6(p.value)
             end
             local setter = function(newValue)
-              commitParam(p, sanitizeBindPhrase(newValue))
+              commitParam(p, formatStr6(newValue))
             end
 
             local f = form.addTextField(line, nil, getter, setter)
@@ -593,7 +598,7 @@ local function buildParamsForm()
     end
   end
 
-  -- Save / Reload footer
+  -- save / reload footer
   do
     local line = form.addLine("Save")
     ui.saveHint = form.addStaticText(line, nil, "")
@@ -604,7 +609,7 @@ local function buildParamsForm()
   ui.built = true
   ui.builtLoading = false
 
-  -- Push initial values in-place
+  -- push initial values in-place
   updateHeaderWidgets()
   updateBindWidgets()
   updateSaveWidgets()
@@ -649,7 +654,7 @@ local function wakeup(_)
 
   local tNow = now()
 
-  -- Build structure if needed
+  -- build structure if needed
   ensureForm()
 
   -- auto-stop bind after timeout
@@ -657,7 +662,7 @@ local function wakeup(_)
     doBindStop()
   end
 
-  -- Start param load exactly once after basics are ready
+  -- start param load exactly once after basics are ready
   if requested and not paramsRequested and not loadedParams and not errMsg and statusMsg == "Ready" then
     paramsRequested = true
     lastRxAvailable = (info and info.rx_available == 1)
@@ -666,22 +671,22 @@ local function wakeup(_)
     bindEndAt = 0
   end
 
-  -- Detect late RX connection and load RX params
+  -- detect late rx connection and load rx params
   if loadedParams and info then
-    pollInfo(tNow)  -- refresh info periodically to detect RX changes
+    pollInfo(tNow)  -- refresh info periodically to detect rx changes
     local nowRxAvailable = (info.rx_available == 1)
     if nowRxAvailable and lastRxAvailable == false then
-      -- RX just connected - load RX params
+      -- rx just connected - load rx params
       lastRxAvailable = true
       requestRxParams()
     elseif not nowRxAvailable and lastRxAvailable == true then
-      -- RX disconnected - rebuild UI to hide RX params
+      -- rx disconnected - rebuild ui to hide rx params
       lastRxAvailable = false
       dirtyForm = true
     end
   end
 
-  -- In-place “dynamic” UI updates (no rebuild)
+  -- in-place “dynamic” ui updates (no rebuild)
   updateStatusWidgets()
 
   if dirtyHeader then

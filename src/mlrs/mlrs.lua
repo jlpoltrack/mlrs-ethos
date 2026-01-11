@@ -1,13 +1,13 @@
 -- mlrs.lua
--- Lightweight queued API for mLRS modules (Ethos / CRSF sensor frames)
+-- lightweight queued api for mlrs modules (ethos / crsf sensor frames)
 --
--- This module implements a pull-based parameter loading system that communicates
--- with mLRS devices via the mBridge layer over CRSF telemetry. It handles 
+-- this module implements a pull-based parameter loading system that communicates
+-- with mlrs devices via the mbridge layer over crsf telemetry. it handles 
 -- asynchronous requests for device info, parameters (including multi-frame
--- enrichment ITEM2/3/4), and module actions like binding and saving.
+-- enrichment item2/3/4), and module actions like binding and saving.
 --
--- Dependencies: Ethos 'crsf' and 'os' globals.
--- Date: 2026-01-02
+-- dependencies: ethos 'crsf' and 'os' globals.
+-- date: 2026-01-11
 
 local M = {}
 M.VERSION = "1.0.0"
@@ -82,7 +82,7 @@ local function rshift(a, n) return (a or 0) >> (n or 0) end
 local function lshift(a, n) return (a or 0) << (n or 0) end
 local function btest(mask, bits) return band(bits, mask) ~= 0 end
 
--- Optimized popcount using a simple lookup for nibbles to reduce iterations
+-- optimized popcount using a simple lookup for nibbles to reduce iterations
 local NIBBLE_LOOKUP = { [0]=0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4 }
 local function popcount16(x)
   x = x or 0
@@ -113,7 +113,7 @@ local function allowed_mask_editable(mask)
 end
 
 -- ---------- payload helpers (0-based offsets) ----------
--- These now take 'payload' (the raw data table) and 'base' (the offset to payload start)
+-- these now take 'payload' (the raw data table) and 'base' (the offset to payload start)
 local function u8(p, base, ofs0) return (p[base + ofs0 + 1] or 0) & 0xFF end
 local function i8(p, base, ofs0)
   local v = u8(p, base, ofs0)
@@ -200,22 +200,18 @@ local function cmd_len(cmd)
   return 0
 end
 
--- Pre-allocate a buffer for pushMB to avoid table churn
+-- pre-allocate a buffer for pushMB to avoid table churn
 local PUSH_BUFFER = { string.byte("O"), string.byte("W"), 0 }
 local function pushMB(sensor, cmd, payload)
   PUSH_BUFFER[3] = A0 + cmd
   local need = cmd_len(cmd)
-  -- Clear buffer from 4 to 3+need
-  for i = 4, 3 + need do PUSH_BUFFER[i] = 0 end
-  -- Copy payload
-  for i = 1, #payload do PUSH_BUFFER[3 + i] = payload[i] end
-  -- If we need to truncate the buffer for pushFrame, we might still have churn 
-  -- if Ethos doesn't support a length parameter. But many Ethos versions copy the table anyway.
-  -- We'll assume for now we should only send the relevant part if possible.
-  -- To be safest and most efficient, we reuse as much as we can.
-  local framesize = 3 + need
-  if #PUSH_BUFFER > framesize then
-    for i = #PUSH_BUFFER, framesize + 1, -1 do PUSH_BUFFER[i] = nil end
+  -- fill buffer from index 4 to 3+need with payload bytes or 0
+  for i = 1, need do
+    PUSH_BUFFER[3 + i] = payload[i] or 0
+  end
+  -- truncate the buffer to the exact required size for ethos
+  for i = #PUSH_BUFFER, 4 + need, -1 do
+    PUSH_BUFFER[i] = nil
   end
   return sensor:pushFrame(129, PUSH_BUFFER)
 end
@@ -421,7 +417,7 @@ end
 local function handleFrame(model, cmd, data)
   if cmd ~= 130 or not data or #data < 2 then return end
   local mcmd = data[1] - A0
-  local base = 1 -- MBridge payload starts at data[2]
+  local base = 1 -- mbridge payload starts at data[2]
   model.lastRxAt = now()
 
   if mcmd == CMD_DEVICE_ITEM_TX then
@@ -458,6 +454,24 @@ local function activeReq(self)
 end
 
 local function enqueue(self, req)
+  -- deduplicate: if an identical request is already pending, don't add another
+  for i = 1, #self.queue do
+    local r = self.queue[i]
+    if not r.done then
+      if r.type == req.type and r.idx0 == req.idx0 then
+        -- identical request exists; merge callback if provided
+        if req.cb then
+          local oldCb = r.cb
+          r.cb = function(res)
+            if oldCb then oldCb(res) end
+            req.cb(res)
+          end
+        end
+        return r.id
+      end
+    end
+  end
+
   req.id = self.nextReqId
   self.nextReqId = self.nextReqId + 1
   self.queue[#self.queue + 1] = req
@@ -571,19 +585,14 @@ end
 local function maybeRequestInfo(self)
   local m = self.model
   local t = now()
-  if m.gotInfo then return end
-  if (not m.lastInfoReqAt) or (t - m.lastInfoReqAt > DEFAULTS.REQ_INTERVAL_INFO_S) then
+  if m.gotInfo and m.txItem and m.rxItem then return end
+  
+  -- CMD_REQUEST_INFO returns both INFO and device items (TX/RX)
+  -- we consolidate them to avoid spammed requests in the same tick.
+  local lastGenericReqAt = math.max(m.lastInfoReqAt or 0, m.lastDeviceReqAt or 0)
+  if (t - lastGenericReqAt > DEFAULTS.REQ_INTERVAL_INFO_S) then
     pushMB(self.sensor, CMD_REQUEST_INFO, {})
     m.lastInfoReqAt = t
-  end
-end
-
-local function maybeRequestDeviceItems(self)
-  local m = self.model
-  local t = now()
-  if m.txItem and m.rxItem then return end
-  if (not m.lastDeviceReqAt) or (t - m.lastDeviceReqAt > DEFAULTS.REQ_INTERVAL_INFO_S) then
-    pushMB(self.sensor, CMD_REQUEST_INFO, {})
     m.lastDeviceReqAt = t
   end
 end
@@ -648,7 +657,6 @@ function M.processQueue(self)
     if m.txItem then
       finish(req, true, { tx = m.txItem, rx = m.rxItem, info = m.info })
     else
-      maybeRequestDeviceItems(self)
       maybeRequestInfo(self)
     end
     return
@@ -658,7 +666,7 @@ function M.processQueue(self)
     if m.rxItem then
       finish(req, true, { rx = m.rxItem })
     else
-      maybeRequestDeviceItems(self)
+      maybeRequestInfo(self)
     end
     return
   end
