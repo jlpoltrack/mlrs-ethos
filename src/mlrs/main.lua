@@ -31,6 +31,13 @@ local bindEndAt = 0
 
 local hasUnsavedChanges = false
 
+-- RX presence tracking (latched)
+local rxPresent = nil
+local lastRxProbeAt = 0
+
+local linkActive = false
+local lastLinkActive = nil
+
 local function now() return os.clock() end
 local function fmt(x) return (x == nil) and "---" or tostring(x) end
 
@@ -52,7 +59,13 @@ local ui = {
   saveButton = nil,
 
   param = {},             -- ui.param[idx0] = field handle
+  paramGroup = {},        -- ui.paramGroup[idx0] = "tx" | "rx" | "bind" | "general"
 }
+
+local function crsfLinkPresent()
+  local tlm = system.getSource({ category = CATEGORY_SYSTEM_EVENT, member = TELEMETRY_ACTIVE })
+  return (tlm and tlm:state()) or false
+end
 
 -- Structural rebuild flag (ONLY for structure changes)
 local dirtyForm = true
@@ -90,6 +103,17 @@ local function updateHeaderWidgets()
   else
     safeCall(ui.rx, "value", "")
   end
+end
+
+local function isRxPresent()
+  if not dev then return false end
+  if dev.rx and dev.rx.name and dev.rx.name ~= "" then
+    return true
+  end
+  if info and info.rx_available == 1 then
+    return true
+  end
+  return false
 end
 
 local function setStatus(s)
@@ -205,7 +229,9 @@ local function requestBasics()
         setStatus("Error")
         return
       end
+
       info = res2.data and res2.data.info or info
+
       setStatus("Ready")
 
       -- Update header in-place if form already exists
@@ -332,8 +358,39 @@ local function doReload()
   statusMsg = "Reloading…"
   bindActive = false
   bindEndAt = 0
+  rxPresent = nil
 
   -- force structural rebuild back to loading view
+  ui.built = false
+  ui.builtLoading = false
+  ui.param = {}
+  ui.status, ui.tx, ui.rx = nil, nil, nil
+  ui.bindStatus, ui.bindButton = nil, nil
+  ui.saveHint, ui.saveButton = nil, nil
+  dirtyForm = true
+
+  requestBasics()
+end
+
+-- When link comes back, force a re-query from the module so RX/TX/device/params are fresh.
+local function reloadFromModuleOnLinkUp()
+  if not api then return end
+
+  api:reset()
+
+  requested = false
+  loadedParams = false
+  paramsRequested = false
+  hasUnsavedChanges = false
+
+  dev, info, params = nil, nil, nil
+  errMsg = nil
+  statusMsg = "Link active — refreshing…"
+  bindActive = false
+  bindEndAt = 0
+  rxPresent = nil
+
+  -- force structural rebuild back to loading view (then params view after re-load)
   ui.built = false
   ui.builtLoading = false
   ui.param = {}
@@ -363,12 +420,6 @@ local function buildLoadingForm()
   local line = form.addLine("Status")
   ui.status = form.addStaticText(line, nil, statusText())
 
-  local l2 = form.addLine("")
-  form.addStaticText(l2, nil, "Loading parameters…")
-
-  local l3 = form.addLine("")
-  addButtonLine("", "Reload", doReload)
-
   ui.builtLoading = true
   ui.built = false
 
@@ -377,9 +428,47 @@ local function buildLoadingForm()
   updateSaveWidgets()
 end
 
+local function isRxParamName(name)
+  name = tostring(name or "")
+  if name == "" then return false end
+  -- common conventions: "RX_", "RX ", "[RX]" "Rx:"
+  if name:match("^[Rr][Xx][ _:%[]") then return true end
+  if name:match("^%[[Rr][Xx]%]") then return true end
+  -- also allow "rx_" anywhere with a word boundary-ish guard
+  if name:match("([_%s%[])[Rr][Xx][_%s%]:]") then return true end
+  return false
+end
+
+local function paramVisible(_p) return true end
+
+local function paramGroupByPrefix(name)
+  name = tostring(name or "")
+
+  -- Transmitter-related prefixes
+  if name:match("^[Tt][Xx]%f[%A]") then return "tx" end
+  if name:match("^[Mm]ode%f[%A]") then return "tx" end
+  if name:match("^[Rr][Ff]%f[%A]") then return "tx" end
+
+  -- Bind related prefixes
+  if name:match("^[Bb]ind%f[%A]") then return "bind" end
+
+  -- Receiver-related prefixes
+  if name:match("^[Rr][Xx]%f[%A]") then return "rx" end
+
+  return "general"
+end
+
+local function addLineTo(parent, label)
+  if parent and parent.addLine then
+    return parent:addLine(label)
+  end
+  return form.addLine(label)
+end
+
 local function buildParamsForm()
   form.clear()
   ui.param = {}
+  ui.paramGroup = {}
 
   -- Status
   do
@@ -387,84 +476,124 @@ local function buildParamsForm()
     ui.status = form.addStaticText(line, nil, statusText())
   end
 
-  -- TX / RX identity
+  -- Grouped parameter panels (Tx / Rx), like dashboard_theme.lua does it
+  local tx_panel = form.addExpansionPanel("Transmitter")
+  tx_panel:open(false)
+
   do
-    local line = form.addLine("TX")
+    -- Put TX identity as the first line inside the TX panel
+    local line = tx_panel:addLine("Info")
     ui.tx = form.addStaticText(line, nil, "")
-    local line2 = form.addLine("RX")
-    ui.rx = form.addStaticText(line2, nil, "")
   end
 
-  -- Bind section (status + one button; press fn decides action)
-  do
-    local line = form.addLine("Bind")
-    ui.bindStatus = form.addStaticText(line, nil, "")
-    addButtonLine("", "Bind / Stop", function()
-      if bindActive then doBindStop() else doBindStart() end
-    end)
+  local rx_panel = nil
+  if linkActive then
+    rx_panel = form.addExpansionPanel("Receiver")
+    rx_panel:open(false)
+
+    do
+      -- Put RX identity as the first line inside the RX panel
+      local line = rx_panel:addLine("Info")
+      ui.rx = form.addStaticText(line, nil, "")
+    end
+  else
+    ui.rx = nil
+
   end
+
+  -- Binding panel (button + status + all "Bind*" params)
+  local bind_panel = form.addExpansionPanel("Binding")
+  bind_panel:open(false)
+  do
+    local line = bind_panel:addLine("Status")
+    ui.bindStatus = form.addStaticText(line, nil, "")
+    local bline = bind_panel:addLine("")
+    if form.addButton then
+      ui.bindButton = form.addButton(bline, nil, { text = "Bind / Stop", press = function()
+        if bindActive then doBindStop() else doBindStart() end
+      end })
+    else
+      ui.bindButton = form.addTextButton(bline, nil, "Bind / Stop", function()
+        if bindActive then doBindStop() else doBindStart() end
+      end)
+    end
+  end  
 
   -- Params
   if params then
     for i = 1, #params do
       local p = params[i]
       if p and p.name and p.name ~= "" then
-        local label = p.name
-        if p.unit and p.unit ~= "" then
-          label = label .. " (" .. p.unit .. ")"
-        end
-
-        local editable = (p.editable ~= false)
-        if editable then
-          local line = form.addLine(label)
-
-          if p.typ == 4 then
-            -- LIST
-            local choices = buildChoicesFromOptions(p.options)
-            local getter = function()
-              local v = tonumber(p.value) or 0
-              if v < 0 then v = 0 end
-              if v > (#choices - 1) then v = (#choices - 1) end
-              return v
-            end
-            local setter = function(val)
-              commitParam(p, tonumber(val) or 0)
-            end
-
-            local f = form.addChoiceField(line, nil, choices, getter, setter)
-            ui.param[p.idx0] = f
-
-            -- set metadata via methods if available
-            safeCall(f, "values", choices)
-            safeCall(f, "minimum", 0)
-            safeCall(f, "maximum", math.max(#choices - 1, 0))
-
-          elseif p.typ == 5 then
-            -- STR6
-            local getter = function()
-              return sanitizeBindPhrase(p.value)
-            end
-            local setter = function(newValue)
-              commitParam(p, sanitizeBindPhrase(newValue))
-            end
-
-            local f = form.addTextField(line, nil, getter, setter)
-            ui.param[p.idx0] = f
-
-          else
-            -- numeric
-            local min = p.min or 0
-            local max = p.max or 65535
-            local getter = function() return p.value or 0 end
-            local setter = function(val) commitParam(p, val) end
-
-            local f = form.addNumberField(line, nil, min, max, getter, setter)
-            ui.param[p.idx0] = f
-
-            safeCall(f, "minimum", min)
-            safeCall(f, "maximum", max)
+        if true then
+          local label = p.name
+          if p.unit and p.unit ~= "" then
+            label = label .. " (" .. p.unit .. ")"
           end
-        end
+
+          local grp = paramGroupByPrefix(p.name)
+          local parent = nil
+          if grp == "tx" then parent = tx_panel end
+          if grp == "rx" then parent = rx_panel end 
+          if grp == "bind" then parent = bind_panel end         
+
+          local editable = (p.editable ~= false)
+          if editable and parent then
+            local line = addLineTo(parent, label)
+
+            if p.typ == 4 then
+              -- LIST
+              local choices = buildChoicesFromOptions(p.options)
+              local getter = function()
+                local v = tonumber(p.value) or 0
+                if v < 0 then v = 0 end
+                if v > (#choices - 1) then v = (#choices - 1) end
+                return v
+              end
+              local setter = function(val)
+                commitParam(p, tonumber(val) or 0)
+              end
+
+              local f = form.addChoiceField(line, nil, choices, getter, setter)
+              ui.param[p.idx0] = f
+              ui.paramGroup[p.idx0] = grp
+                       
+
+              -- set metadata via methods if available
+              safeCall(f, "values", choices)
+              safeCall(f, "minimum", 0)
+              safeCall(f, "maximum", math.max(#choices - 1, 0))
+
+            elseif p.typ == 5 then
+              -- STR6
+              local getter = function()
+                return sanitizeBindPhrase(p.value)
+              end
+              local setter = function(newValue)
+                commitParam(p, sanitizeBindPhrase(newValue))
+              end
+
+              local f = form.addTextField(line, nil, getter, setter)
+              ui.param[p.idx0] = f
+              ui.paramGroup[p.idx0] = grp
+       
+
+            else
+              -- numeric
+              local min = p.min or 0
+              local max = p.max or 65535
+              local getter = function() return p.value or 0 end
+              local setter = function(val) commitParam(p, val) end
+
+              local f = form.addNumberField(line, nil, min, max, getter, setter)
+              ui.param[p.idx0] = f
+              ui.paramGroup[p.idx0] = grp
+              f:enable(grp ~= "rx" or rxPresent == true)              
+
+              safeCall(f, "minimum", min)
+              safeCall(f, "maximum", max)
+            end
+          end
+        end 
       end
     end
   end
@@ -484,6 +613,7 @@ local function buildParamsForm()
   updateHeaderWidgets()
   updateBindWidgets()
   updateSaveWidgets()
+
 
   if params then
     for i = 1, #params do
@@ -542,8 +672,26 @@ local function wakeup(_)
   if not api then return end
   api:processQueue(24)
 
+  linkActive = crsfLinkPresent() and true or false
+
+  -- If link state toggled, rebuild entire form (structure changes: RX panel/fields)
+  if lastLinkActive == nil then
+    lastLinkActive = linkActive
+  elseif lastLinkActive ~= linkActive then
+    local becameTrue = (not lastLinkActive) and linkActive
+    lastLinkActive = linkActive
+    -- Always rebuild structure on any toggle
+    dirtyForm = true
+    -- But if link just became active, re-query everything from the module
+    if becameTrue then
+      reloadFromModuleOnLinkUp()
+    end
+  end
+
+
   -- Build structure if needed
   ensureForm()
+
 
   -- auto-stop bind after timeout
   if bindActive and bindEndAt and now() >= bindEndAt then

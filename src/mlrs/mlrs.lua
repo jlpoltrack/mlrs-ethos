@@ -603,7 +603,14 @@ function M.processQueue(self, maxFrames)
 
   -- ---- GET_DEVICE_ITEMS ----
   if req.type == "GET_DEVICE_ITEMS" then
-    if self.model.txItem and self.model.rxItem then
+    -- IMPORTANT:
+    -- Some setups legitimately have no RX (or it's offline).
+    -- Use INFO.rx_available to decide whether RX is expected.
+    local haveTx = (self.model.txItem ~= nil)
+    local haveRx = (self.model.rxItem ~= nil)
+    local rxAvail = (self.model.info and self.model.info.rx_available) -- 1 or 0 or nil
+
+    if haveTx and (haveRx or rxAvail == 0) then
       finish(req, true, { tx = self.model.txItem, rx = self.model.rxItem, info = self.model.info })
     else
       maybeRequestDeviceItems(self)
