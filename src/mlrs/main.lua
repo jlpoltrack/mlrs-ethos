@@ -3,7 +3,9 @@
   GPLv3 — https://www.gnu.org/licenses/gpl-3.0.en.html
 ]]--
 
-local BASE = "RADIO:/scripts/mlrs"
+local SYSTEM_TOOL = false  -- set to true to force system tool registration
+
+local BASE = "SCRIPTS:/mlrs"
 
 local mlrs = assert(loadfile(BASE .. "/mlrs.lua"))()
 
@@ -587,12 +589,25 @@ local function close(_)
 end
 
 local function init()
+
+  -- force loading as system tool
+  if SYSTEM_TOOL == true then
+    print("MLRS: registering as system tool")
+    system.registerSystemTool({
+      name = "MLRS", icon = icon, create = create, wakeup = wakeup, event = event, paint = paint, close = close
+    })
+    return
+  end
+
+  -- otherwise, try to register as MLRS module if supported
   local v = system.getVersion()
-  if v.major >= 1 and v.minor >= 7 then
+  if v.major >= 1 and v.minor >= 7 and system.registerMlrsModule then
+    print("MLRS: registering as MLRS module")
     system.registerMlrsModule({
       configure = { name = "MLRS", create = create, wakeup = wakeup, event = event, close = close }
     })
   else
+    print("MLRS: registering as system tool")
     system.registerSystemTool({
       name = "MLRS", icon = icon, create = create, wakeup = wakeup, event = event, paint = paint, close = close
     })
