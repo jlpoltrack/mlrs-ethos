@@ -553,7 +553,7 @@ local function requestParamByIndex(self, idx0)
   local m = self.model
   local t = now()
   -- keep this modest; the upstream script drives ~30Hz (33 * 10ms)
-  if (not m.lastIndexReqAt) or (t - m.lastIndexReqAt > 0.10) then
+  if (not m.lastIndexReqAt) or (t - m.lastIndexReqAt > 0) then
     pushMB(self.sensor, CMD_REQUEST_CMD, { CMD_PARAM_ITEM, idx0 & 0xFF })
     m.lastIndexReqAt = t
   end

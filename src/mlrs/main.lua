@@ -639,7 +639,7 @@ end
 ------------------------------------------------------------
 local function create()
   if not api then
-    api = mlrs.new({ settleS = 1.5, strategy = "by_index", saveDeadS = 3.0 })
+    api = mlrs.new({ settleS = 0, strategy = "by_index", saveDeadS = 3.0 })
     setmetatable(api, { __index = mlrs })
   end
 
